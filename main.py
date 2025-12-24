@@ -559,33 +559,42 @@ class MemoApp:
         self.is_modified = False
 
     def delete_memo(self):
-        """選択されたメモを削除"""
-        selection = self.memo_listbox.curselection()
+        """選択されたメモを削除（3本Listbox版）"""
+        selection = self.list_attr.curselection()  # 基準となるListbox
         if not selection:
             messagebox.showwarning("警告", "削除するメモを選択してください。")
             return
-        
+
         index = selection[0]
         sorted_memos = self.get_sorted_memos()
-        
-        if index < len(sorted_memos):
-            memo_id, memo = sorted_memos[index]
-            
-            result = messagebox.askyesno("確認", 
-                                       f"「{memo['title']}」を削除してもよろしいですか？")
-            
-            if result:
-                del self.memos[memo_id]
-                self.save_data()
-                self.refresh_memo_list()
-                
-                if self.current_memo_id == memo_id:
-                    self.clear_fields()
-                    self.current_memo_id = None
-                    self.is_modified = False
-                
-                messagebox.showinfo("成功", "メモを削除しました。")
-    
+        if index >= len(sorted_memos):
+            return
+
+        memo_id, memo = sorted_memos[index]
+
+        result = messagebox.askyesno(
+            "確認",
+            f"「{memo['title']}」を削除してもよろしいですか？"
+        )
+        if not result:
+            return
+
+        # 実際の削除
+        del self.memos[memo_id]
+        self.save_data()
+        self.refresh_memo_list()
+
+        # 選択状態をクリア
+        for lb in (self.list_attr, self.list_title, self.list_time):
+            lb.selection_clear(0, tk.END)
+
+        if self.current_memo_id == memo_id:
+            self.clear_fields()
+            self.current_memo_id = None
+            self.is_modified = False
+
+        messagebox.showinfo("成功", "メモを削除しました。")
+
     def refresh_memo_list(self):
         """メモ一覧を更新（3本のリストに分割表示）"""
         # まず全部消す
