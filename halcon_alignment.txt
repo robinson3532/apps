@@ -1,0 +1,225 @@
+* ========================================
+* HALCON 二値画像位置合わせ（RANSAC + ホモグラフィ推定）
+* ========================================
+
+* ===== パラメータ設定 =====
+DownsampleFactor := 0.25          * ダウンサンプリング係数
+MinGoldPadArea := 10              * 金パッド最小面積（1/4スケール）
+MaxGoldPadArea := 10000           * 金パッド最大面積（1/4スケール）
+MinCircularity := 0.5             * 最小円形度（バンプ除去用）
+MaxCircularity := 1.0             * 最大円形度
+MatchDistThreshold := 50.0        * 最近傍マッチング距離閾値
+RANSACIterations := 100           * RANSAC反復回数
+RANSACInlierThreshold := 2.0      * インライア判定閾値（ピクセル）
+MinInlierRatio := 0.3             * 最小インライア率（早期終了用）
+
+* ===== 画像読み込み =====
+* ※ 実際の画像パスに置き換えてください
+read_image(TargetImage, 'target_binary.png')
+read_image(SourceImage, 'source_binary.png')
+
+* ===== ステップ1: ダウンサンプリング =====
+zoom_image_factor(TargetImage, TargetSmall, DownsampleFactor, DownsampleFactor, 'constant')
+zoom_image_factor(SourceImage, SourceSmall, DownsampleFactor, DownsampleFactor, 'constant')
+
+* ===== ステップ2: 金パッド領域抽出（ターゲット） =====
+threshold(TargetSmall, RegionTarget, 1, 255)
+connection(RegionTarget, ConnectedTarget)
+select_shape(ConnectedTarget, SelectedTarget, ['area','circularity'], 'and', [MinGoldPadArea,MinCircularity], [MaxGoldPadArea,MaxCircularity])
+area_center(SelectedTarget, AreaT, RowTarget, ColTarget)
+
+* ===== ステップ3: 金パッド領域抽出（ソース） =====
+threshold(SourceSmall, RegionSource, 1, 255)
+connection(RegionSource, ConnectedSource)
+select_shape(ConnectedSource, SelectedSource, ['area','circularity'], 'and', [MinGoldPadArea,MinCircularity], [MaxGoldPadArea,MaxCircularity])
+area_center(SelectedSource, AreaS, RowSource, ColSource)
+
+* 点数確認
+NumPointsT := |RowTarget|
+NumPointsS := |RowSource|
+
+if (NumPointsT < 4 or NumPointsS < 4)
+    stop() * エラー: 特徴点が不足
+endif
+
+* ===== ステップ4: 最近傍マッチング（高速版） =====
+* 方法: k-d tree的なアプローチの代わりに、空間分割による高速化
+
+* 4-1. ソース点を空間ハッシュに格納（グリッドベース）
+GridSize := 100.0
+get_image_size(SourceSmall, WidthS, HeightS)
+NumGridX := int(WidthS / GridSize) + 1
+NumGridY := int(HeightS / GridSize) + 1
+
+* グリッドごとの点リストを作成（簡易版: 全探索だが範囲限定）
+MatchedRowT := []
+MatchedColT := []
+MatchedRowS := []
+MatchedColS := []
+
+for i := 0 to NumPointsT-1 by 1
+    * 探索範囲を制限（周辺グリッドのみ）
+    TargetGridX := int(ColTarget[i] / GridSize)
+    TargetGridY := int(RowTarget[i] / GridSize)
+    
+    MinDist := 999999.0
+    MinIdx := -1
+    
+    * 周辺グリッド内のソース点のみ探索
+    for j := 0 to NumPointsS-1 by 1
+        SourceGridX := int(ColSource[j] / GridSize)
+        SourceGridY := int(RowSource[j] / GridSize)
+        
+        * グリッド距離が2以上離れていればスキップ（高速化）
+        if (abs(TargetGridX - SourceGridX) > 2 or abs(TargetGridY - SourceGridY) > 2)
+            continue
+        endif
+        
+        DistSq := (RowTarget[i]-RowSource[j])*(RowTarget[i]-RowSource[j]) + (ColTarget[i]-ColSource[j])*(ColTarget[i]-ColSource[j])
+        Dist := sqrt(DistSq)
+        
+        if (Dist < MinDist)
+            MinDist := Dist
+            MinIdx := j
+        endif
+    endfor
+    
+    * 距離閾値でフィルタリング
+    if (MinDist < MatchDistThreshold and MinIdx >= 0)
+        MatchedRowT := [MatchedRowT, RowTarget[i]]
+        MatchedColT := [MatchedColT, ColTarget[i]]
+        MatchedRowS := [MatchedRowS, RowSource[MinIdx]]
+        MatchedColS := [MatchedColS, ColSource[MinIdx]]
+    endif
+endfor
+
+NumMatched := |MatchedRowT|
+
+if (NumMatched < 4)
+    stop() * エラー: マッチング点が不足
+endif
+
+* ===== ステップ5: RANSACによるホモグラフィ推定 =====
+set_system('seed_rand', 12345) * 乱数シード固定（再現性のため）
+
+BestInliers := 0
+BestHomMat2D := []
+BestInlierIndices := []
+
+for iter := 0 to RANSACIterations-1 by 1
+    * ランダムに4点サンプリング
+    Idx := []
+    for sample := 0 to 3 by 1
+        NewIdx := int(rand(1) * NumMatched)
+        Idx := [Idx, NewIdx]
+    endfor
+    
+    * 重複チェック（簡易）
+    if (Idx[0] = Idx[1] or Idx[0] = Idx[2] or Idx[0] = Idx[3] or Idx[1] = Idx[2] or Idx[1] = Idx[3] or Idx[2] = Idx[3])
+        continue
+    endif
+    
+    * 4点からホモグラフィ行列推定
+    try
+        SampleRowT := [MatchedRowT[Idx[0]], MatchedRowT[Idx[1]], MatchedRowT[Idx[2]], MatchedRowT[Idx[3]]]
+        SampleColT := [MatchedColT[Idx[0]], MatchedColT[Idx[1]], MatchedColT[Idx[2]], MatchedColT[Idx[3]]]
+        SampleRowS := [MatchedRowS[Idx[0]], MatchedRowS[Idx[1]], MatchedRowS[Idx[2]], MatchedRowS[Idx[3]]]
+        SampleColS := [MatchedColS[Idx[0]], MatchedColS[Idx[1]], MatchedColS[Idx[2]], MatchedColS[Idx[3]]]
+        
+        vector_to_proj_hom_mat2d(SampleRowT, SampleColT, SampleRowS, SampleColS, 'normalized_dlt', HomMat2D)
+        
+        * インライア数カウント
+        NumInliers := 0
+        InlierIndices := []
+        
+        for i := 0 to NumMatched-1 by 1
+            * 変換後の座標計算
+            projective_trans_point_2d(HomMat2D, MatchedRowT[i], MatchedColT[i], RowTrans, ColTrans)
+            
+            * 再投影誤差
+            ErrorSq := (RowTrans-MatchedRowS[i])*(RowTrans-MatchedRowS[i]) + (ColTrans-MatchedColS[i])*(ColTrans-MatchedColS[i])
+            Error := sqrt(ErrorSq)
+            
+            if (Error < RANSACInlierThreshold)
+                NumInliers := NumInliers + 1
+                InlierIndices := [InlierIndices, i]
+            endif
+        endfor
+        
+        * 最良モデル更新
+        if (NumInliers > BestInliers)
+            BestInliers := NumInliers
+            BestHomMat2D := HomMat2D
+            BestInlierIndices := InlierIndices
+        endif
+        
+        * 早期終了判定
+        InlierRatio := real(NumInliers) / real(NumMatched)
+        if (InlierRatio > 0.9)
+            break
+        endif
+        
+    catch (Exception)
+        * 特異配置などでエラーが出た場合はスキップ
+        continue
+    endtry
+endfor
+
+* インライア率チェック
+FinalInlierRatio := real(BestInliers) / real(NumMatched)
+if (FinalInlierRatio < MinInlierRatio)
+    stop() * エラー: インライアが少なすぎる
+endif
+
+* ===== ステップ6: インライアのみで再推定（精度向上） =====
+if (BestInliers >= 4)
+    InlierRowT := []
+    InlierColT := []
+    InlierRowS := []
+    InlierColS := []
+    
+    for i := 0 to |BestInlierIndices|-1 by 1
+        Idx := BestInlierIndices[i]
+        InlierRowT := [InlierRowT, MatchedRowT[Idx]]
+        InlierColT := [InlierColT, MatchedColT[Idx]]
+        InlierRowS := [InlierRowS, MatchedRowS[Idx]]
+        InlierColS := [InlierColS, MatchedColS[Idx]]
+    endfor
+    
+    vector_to_proj_hom_mat2d(InlierRowT, InlierColT, InlierRowS, InlierColS, 'gold_standard', HomMat2DRefined)
+    BestHomMat2D := HomMat2DRefined
+endif
+
+* ===== ステップ7: スケール補正（1/4 → 元解像度） =====
+* ホモグラフィ行列のスケール補正
+ScaleFactor := 1.0 / DownsampleFactor
+
+* スケール行列を作成
+hom_mat2d_identity(ScaleMatInv)
+hom_mat2d_scale(ScaleMatInv, ScaleFactor, ScaleFactor, 0, 0, ScaleMatInv)
+
+hom_mat2d_identity(ScaleMat)
+hom_mat2d_scale(ScaleMat, DownsampleFactor, DownsampleFactor, 0, 0, ScaleMat)
+
+* H_full = ScaleInv * H_small * Scale
+hom_mat2d_compose(BestHomMat2D, ScaleMat, TempMat)
+hom_mat2d_compose(ScaleMatInv, TempMat, HomMat2DFinal)
+
+* ===== ステップ8: 最終変換適用 =====
+projective_trans_image(TargetImage, AlignedImage, HomMat2DFinal, 'bilinear', 'false', 'false')
+
+* ===== 結果表示 =====
+dev_close_window()
+dev_open_window(0, 0, 800, 800, 'black', WindowHandle)
+
+dev_display(SourceImage)
+dev_set_color('green')
+dev_display(AlignedImage)
+
+* 結果出力
+write_image(AlignedImage, 'png', 0, 'aligned_result.png')
+
+* ===== 情報出力 =====
+* マッチング点数
+* インライア数
+* インライア率
