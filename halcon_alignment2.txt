@@ -1,0 +1,18 @@
+for I := 0 to NumTarget-1 by 1
+    * 各ターゲット点 i に対する全ソース点との距離タプル作成
+    distance_pp(SourceRow, SourceCol, TargetRow[I], TargetCol[I], Distances)
+    
+    * 距離タプルから最小値のインデックス取得
+    tuple_sort_index(Distances, SortedIndices)
+    NearestIdx := SortedIndices[0]  * 最小距離のソースインデックス
+    
+    * 最近傍ソース座標を追加
+    tuple_select(SourceRow, NearestIdx, NearestRow)
+    tuple_select(SourceCol, NearestIdx, NearestCol)
+    NearestSourceRow := NearestSourceRow + NearestRow
+    NearestSourceCol := NearestSourceCol + NearestCol
+    
+    * 最小距離も記録（オプション）
+    tuple_select(Distances, NearestIdx, MinDist)
+    MinDistances := MinDistances + MinDist
+endfor
