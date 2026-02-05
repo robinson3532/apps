@@ -1,16 +1,17 @@
- * キー用タプル初期化
-* 座標を整数キー化（精度に応じてScale調整）
-Scale := 1000.0
-Xk := round(X * Scale)
-Yk := round(Y * Scale)
-Zk := round(Z * Scale)
-* 3次元→1次元キー（オーバーフロー注意）
-Key := Xk * 1000000 + Yk * 1000 + Zk
-*重複削除
+* Compactness, Circularity: 精度0.01
+Scale := 100.0
+Compactness_k := round(Compactness * Scale)
+Circularity_k := round(Circularity * Scale)
+Area_k := Area
+
+* キー生成
+Key := Compactness_k * 1000000 + Circularity_k * 10000 + Area_k
+
+* 重複削除
 tuple_uniq(Key, UniqueKey)
-* インデックス検索
 tuple_find(Key, UniqueKey, UniqueIdx)
-* 元座標からユニーク抽出
-Xuniq := X[UniqueIdx]
-Yuniq := Y[UniqueIdx]
-Zuniq := Z[UniqueIdx]
+
+* 結果
+Compactness_uniq := Compactness[UniqueIdx]
+Circularity_uniq := Circularity[UniqueIdx]
+Area_uniq := Area[UniqueIdx]
