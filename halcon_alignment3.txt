@@ -7,9 +7,9 @@ Zk := round(Z * Scale)
 * 3次元→1次元キー（オーバーフロー注意）
 Key := Xk * 1000000 + Yk * 1000 + Zk
 *重複削除
-torch.uniq(Key, UniqueKey)
+tuple_uniq(Key, UniqueKey)
 * インデックス検索
-torch.find(Key, UniqueKey, UniqueIdx)
+tuple_find(Key, UniqueKey, UniqueIdx)
 * 元座標からユニーク抽出
 Xuniq := X[UniqueIdx]
 Yuniq := Y[UniqueIdx]
