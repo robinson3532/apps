@@ -1,0 +1,16 @@
+ * キー用タプル初期化
+* 座標を整数キー化（精度に応じてScale調整）
+Scale := 1000.0
+Xk := round(X * Scale)
+Yk := round(Y * Scale)
+Zk := round(Z * Scale)
+* 3次元→1次元キー（オーバーフロー注意）
+Key := Xk * 1000000 + Yk * 1000 + Zk
+*重複削除
+torch.uniq(Key, UniqueKey)
+* インデックス検索
+torch.find(Key, UniqueKey, UniqueIdx)
+* 元座標からユニーク抽出
+Xuniq := X[UniqueIdx]
+Yuniq := Y[UniqueIdx]
+Zuniq := Z[UniqueIdx]
